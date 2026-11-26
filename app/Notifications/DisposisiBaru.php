@@ -1,0 +1,63 @@
+<?php
+
+namespace App\Notifications;
+
+use App\Models\Disposisi;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Notifications\Messages\MailMessage;
+use Illuminate\Notifications\Notification;
+use Illuminate\Support\Facades\Storage;
+
+/** Dikirim ke pengguna unit tujuan saat register diteruskan. */
+class DisposisiBaru extends Notification implements ShouldQueue
+{
+    public function __construct(public Disposisi $disposisi)
+    {
+    }
+
+    public function via(object $notifiable): array
+    {
+        return ['database', 'mail'];
+    }
+
+    public function toArray(object $notifiable): array
+    {
+        return [
+            'jenis' => 'disposisi_baru',
+            'judul' => 'Register baru: ' . $this->disposisi->nomorSurat(),
+            'pesan' => $this->disposisi->perihal() . ' — batas '
+                . ($this->disposisi->tgl_penyelesaian?->translatedFormat('d F Y') ?? 'tanpa batas'),
+            'url' => $this->tautan(),
+        ];
+    }
+
+    public function toMail(object $notifiable): MailMessage
+    {
+        $mail = (new MailMessage)
+            ->subject('Register baru: ' . $this->disposisi->nomorSurat())
+            ->greeting('Yth. ' . $notifiable->name)
+            ->line('Register surat masuk dari ' . ($this->disposisi->pembuat?->name ?? 'operator') . '.')
+            ->line('Nomor: ' . $this->disposisi->nomorSurat() . ' — ' . $this->disposisi->perihal())
+            ->line('Dari: ' . $this->disposisi->asal())
+            ->line('Instruksi: ' . ($this->disposisi->instruksi ?: 'Menunggu perintah pimpinan'))
+            ->line('Batas penyelesaian: ' . ($this->disposisi->tgl_penyelesaian?->translatedFormat('d F Y') ?? 'tidak ditentukan'))
+            ->action('Buka SiSuma', $this->tautan())
+            ->line('Kartu register terlampir. Mohon ditindaklanjuti dan unggah bukti hasilnya.');
+
+        $path = $this->disposisi->kartu_path;
+
+        if ($path && Storage::exists($path)) {
+            $mail->attach(Storage::path($path), [
+                'as' => $this->disposisi->kartu_nama ?: 'kartu-register.pdf',
+                'mime' => 'application/pdf',
+            ]);
+        }
+
+        return $mail;
+    }
+
+    private function tautan(): string
+    {
+        return route('surat-masuk.show', $this->disposisi->surat_masuk_id);
+    }
+}

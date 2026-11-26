@@ -1,0 +1,137 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Str;
+
+class Disposisi extends Model
+{
+    use SoftDeletes;
+
+    protected $table = 'disposisi';
+
+    protected $fillable = [
+        'surat_masuk_id', 'dibuat_oleh', 'indeks', 'tgl_penyelesaian',
+        'instruksi', 'tgl_disposisi', 'kartu_path', 'kartu_nama', 'kartu_dibuat_pada',
+    ];
+
+    protected $casts = [
+        'tgl_penyelesaian' => 'date',
+        'tgl_disposisi' => 'datetime',
+        'kartu_dibuat_pada' => 'datetime',
+    ];
+
+    public function suratMasuk()
+    {
+        return $this->belongsTo(SuratMasuk::class);
+    }
+
+    public function pembuat()
+    {
+        return $this->belongsTo(User::class, 'dibuat_oleh');
+    }
+
+    public function tujuan()
+    {
+        return $this->hasMany(DisposisiTujuan::class);
+    }
+
+    /** Surat induk register bertanda rahasia. */
+    public function isRahasia(): bool
+    {
+        return $this->suratMasuk?->isRahasia() ?? false;
+    }
+
+    /** Administrator dan Super TU melihat semua register. */
+    public function bolehDilihatOleh(?User $user): bool
+    {
+        if (! $user) {
+            return false;
+        }
+
+        if ($user->bolehLihatSemuaSurat()) {
+            return true;
+        }
+
+        return $user->unit_id !== null
+            && $this->tujuan()->where('unit_id', $user->unit_id)->exists();
+    }
+
+    /** Penerima notifikasi register: seluruh pengguna unit tujuan. */
+    public function penerimaNotifikasi(?int $unitId = null): Collection
+    {
+        $unit = $unitId === null ? $this->tujuan()->pluck('unit_id') : collect([$unitId]);
+
+        return User::whereIn('unit_id', $unit)->get();
+    }
+
+    public function sudahLewatBatas(): bool
+    {
+        return $this->tgl_penyelesaian !== null && $this->tgl_penyelesaian->isPast();
+    }
+
+    public function nomorSurat(): string
+    {
+        return $this->suratMasuk?->no_agenda ?? ('REG-'.$this->id);
+    }
+
+    public function perihal(): string
+    {
+        return $this->suratMasuk?->perihal ?? '-';
+    }
+
+    public function tanggalSurat()
+    {
+        return $this->suratMasuk?->tgl_surat;
+    }
+
+    public function nomorSuratAsli(): string
+    {
+        return $this->suratMasuk?->no_surat ?? '-';
+    }
+
+    /**
+     * Nama berkas PDF kartu yang mengikuti isi lembar register (nomor surat,
+     * perihal, tanggal) agar mudah dicari saat akan dicetak.
+     */
+    public function namaBerkasKartu(): string
+    {
+        $bagian = [
+            'Kartu Register',
+            $this->nomorSurat(),
+            Str::limit((string) $this->perihal(), 60, ''),
+            $this->tgl_disposisi?->format('Y-m-d'),
+        ];
+
+        $nama = implode(' - ', array_filter($bagian, fn ($b) => filled($b) && $b !== '-'));
+
+        // Ganti karakter yang tidak sah pada nama berkas, mis. garis miring nomor surat.
+        $nama = preg_replace('/[\\\\\/:*?"<>|]+/u', '_', $nama);
+        $nama = preg_replace('/\s+/u', ' ', $nama);
+
+        return Str::limit(trim($nama, ' ._-'), 120, '').'.pdf';
+    }
+
+    /** "Dari" pada kartu: instansi pengirim surat masuk. */
+    public function asal(): string
+    {
+        return $this->suratMasuk?->instansi?->nama ?? '-';
+    }
+
+    public function tautanSurat(): string
+    {
+        if ($this->suratMasuk) {
+            return route('surat-masuk.show', $this->suratMasuk);
+        }
+
+        return route('register.index');
+    }
+
+    public function sudahAdaKartu(): bool
+    {
+        return $this->kartu_path !== null;
+    }
+}
